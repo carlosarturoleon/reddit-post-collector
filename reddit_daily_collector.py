@@ -249,7 +249,8 @@ def daily_collection():
         'medium_activity': {
             'subreddits': [
                 'dataengineering', 'shopify', 'digital_marketing', 'PPC',
-                'analytics', 'BusinessIntelligence', 'PowerBI', 'FacebookAds'
+                'analytics', 'BusinessIntelligence', 'PowerBI', 'FacebookAds',
+                'programacion', 'dataanalysis'   
             ],
             'posts_per_sub': 100,
             'time_filter': 'day',  # 24 hours
@@ -260,7 +261,9 @@ def daily_collection():
         'low_activity': {
             'subreddits': [
                 'tableau', 'GoogleAds', 'MarketingAutomation', 'GoogleAnalytics',
-                'bigquery', 'snowflake', 'GoogleDataStudio', 'databricks'
+                'bigquery', 'snowflake', 'GoogleDataStudio', 'databricks',
+                'nocode', 'devsarg', 'taquerosprogramadores', 'dataanalyst',             
+                'chileIT', 'automation'               
             ],
             'posts_per_sub': 50,
             'time_filter': 'week',  # We'll filter to ~3 days in post-processing
@@ -269,7 +272,10 @@ def daily_collection():
         
         # Tier 4: Very Low Activity (<10K members) - 25 posts, 7 days
         'very_low_activity': {
-            'subreddits': ['Looker', 'LinkedInAds', 'LookerStudio', 'Fivetran', 'datawarehouse', 'ETL'],
+            'subreddits': [
+                'Looker', 'LinkedInAds', 'LookerStudio', 'Fivetran', 'datawarehouse', 'ETL',
+                'ColombiaDevs' 
+            ],
             'posts_per_sub': 25,
             'time_filter': 'week',  # 7 days
             'description': '<10K members'
