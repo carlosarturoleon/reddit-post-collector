@@ -1,0 +1,16 @@
+# Reddit API Configuration
+# Copy this file to praw.ini and fill in your credentials
+# Get credentials from: https://www.reddit.com/prefs/apps
+
+[DEFAULT]
+# OAuth settings
+client_id=YOUR_CLIENT_ID_HERE
+client_secret=YOUR_CLIENT_SECRET_HERE
+user_agent=reddit-data-collector/1.0 by YourUsername
+
+# For script applications (recommended for data collection)
+
+# Example filled configuration:
+# client_id=abc123def456
+# client_secret=xyz789abc123def456ghi789
+# user_agent=reddit-data-collector/1.0 by u/yourusername
