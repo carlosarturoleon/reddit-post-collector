@@ -72,6 +72,18 @@ Edit the `SUBREDDIT_CONFIG` in `reddit_daily_collector.py` to customize subreddi
 
 ## Usage Examples
 
+### Collecting Comments from Specific Users
+
+Use the `collect_specific_users.py` script to collect all comments from specific Reddit users:
+
+```python
+# Edit the target_users list in collect_specific_users.py
+target_users = ['username1', 'username2']
+
+# Run the script
+python collect_specific_users.py
+```
+
 ### Basic Collection
 ```python
 from reddit_daily_collector import RedditCollector
@@ -92,6 +104,15 @@ SUBREDDIT_CONFIG = {
         'description': 'ML focused'
     }
 }
+```
+
+### Basic Collection
+```python
+from reddit_daily_collector import RedditCollector
+
+collector = RedditCollector()
+posts = collector.collect_subreddit_posts('datascience', limit=100)
+collector.save_to_csv(posts, 'my_data.csv')
 ```
 
 ## Data Schema

@@ -152,12 +152,12 @@ class RedditCollector:
                 )
                 
                 # Apply additional filtering for low activity subreddits
-                if tier_name == 'low_activity':
-                    # Filter to roughly 3 days (72 hours) for low activity
-                    original_count = len(posts)
-                    posts = self.filter_posts_by_age(posts, max_hours=72)
-                    if len(posts) < original_count:
-                        logging.info(f"  - Filtered r/{subreddit}: {original_count} -> {len(posts)} posts (3-day limit)")
+                # if tier_name == 'low_activity':
+                #     # Filter to roughly 3 days (72 hours) for low activity
+                #     original_count = len(posts)
+                #     posts = self.filter_posts_by_age(posts, max_hours=72)
+                #     if len(posts) < original_count:
+                #         logging.info(f"  - Filtered r/{subreddit}: {original_count} -> {len(posts)} posts (3-day limit)")
                 
                 # Add tier information to each post
                 for post in posts:
@@ -241,19 +241,20 @@ def daily_collection():
         'high_activity': {
             'subreddits': ['datascience', 'marketing'],
             'posts_per_sub': 150,
-            'time_filter': 'day',  # 24 hours
+            'time_filter': 'week',  
             'description': '1M+ members'
         },
         
         # Tier 2: Medium Activity (100K-1M members) - 100 posts, 24 hours  
         'medium_activity': {
             'subreddits': [
-                'dataengineering', 'shopify', 'digital_marketing', 'PPC',
+                # 'dataengineering', 
+                'shopify', 'digital_marketing', 'PPC',
                 'analytics', 'BusinessIntelligence', 'PowerBI', 'FacebookAds',
                 'programacion', 'dataanalysis'   
             ],
             'posts_per_sub': 100,
-            'time_filter': 'day',  # 24 hours
+            'time_filter': 'week', 
             'description': '100K-1M members'
         },
         
