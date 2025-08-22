@@ -32,7 +32,57 @@ class RedditCollector:
             logging.error(f"Failed to initialize Reddit connection: {e}")
             raise
     
-    def collect_subreddit_posts(self, subreddit_name, limit=100, sort_type='new', time_filter='day'):
+    def collect_comments(self, submission, max_comments=200):
+        """
+        Collect top comments from a submission
+        
+        Args:
+            submission: PRAW submission object
+            max_comments (int): Maximum number of comments to collect (default 200)
+            
+        Returns:
+            list: List of comment dictionaries sorted by score (best first)
+        """
+        try:
+            submission.comment_sort = 'best'  # Sort comments by best/top
+            submission.comments.replace_more(limit=0)  # Remove "more comments" objects
+            comments = []
+            
+            # Get all comments and sort by score
+            all_comments = submission.comments.list()
+            
+            # Filter out deleted comments and sort by score
+            valid_comments = []
+            for comment in all_comments:
+                if hasattr(comment, 'body') and comment.body != '[deleted]' and hasattr(comment, 'score'):
+                    valid_comments.append(comment)
+            
+            # Sort by score (descending) to get top comments first
+            valid_comments.sort(key=lambda x: x.score, reverse=True)
+            
+            # Take top comments up to max_comments limit
+            for comment in valid_comments[:max_comments]:
+                comment_data = {
+                    'comment_id': comment.id,
+                    'parent_id': comment.parent_id,
+                    'author': str(comment.author) if comment.author else '[deleted]',
+                    'body': comment.body,
+                    'score': comment.score,
+                    'created_utc': comment.created_utc,
+                    'created_datetime': datetime.fromtimestamp(comment.created_utc, tz=timezone.utc),
+                    'is_submitter': comment.is_submitter,
+                    'stickied': comment.stickied,
+                    'depth': getattr(comment, 'depth', 0)
+                }
+                comments.append(comment_data)
+            
+            return comments
+            
+        except Exception as e:
+            logging.warning(f"Error collecting comments for post {submission.id}: {e}")
+            return []
+
+    def collect_subreddit_posts(self, subreddit_name, limit=100, sort_type='new', time_filter='day', collect_comments=False, max_comments=200):
         """
         Collect posts from a subreddit
         
@@ -41,9 +91,11 @@ class RedditCollector:
             limit (int): Number of posts to collect (max ~1000)
             sort_type (str): 'new', 'hot', 'top', 'rising'
             time_filter (str): 'hour', 'day', 'week', 'month', 'year', 'all' (only for 'top')
+            collect_comments (bool): Whether to collect comments for each post
+            max_comments (int): Maximum number of comments to collect per post
         
         Returns:
-            list: List of post dictionaries
+            list: List of post dictionaries with optional comments
         """
         try:
             subreddit = self.reddit.subreddit(subreddit_name)
@@ -93,6 +145,15 @@ class RedditCollector:
                     'sort_type': sort_type,
                     'time_filter': time_filter if sort_type == 'top' else None
                 }
+                
+                # Collect comments if requested
+                if collect_comments:
+                    post_data['comments'] = self.collect_comments(submission, max_comments)
+                    post_data['comments_collected'] = len(post_data['comments'])
+                else:
+                    post_data['comments'] = []
+                    post_data['comments_collected'] = 0
+                
                 posts.append(post_data)
             
             logging.info(f"Successfully collected {len(posts)} posts from r/{subreddit_name}")
@@ -120,18 +181,21 @@ class RedditCollector:
         
         return filtered
     
-    def collect_activity_based(self, subreddit_config):
+    def collect_activity_based(self, subreddit_config, collect_comments=False, max_comments=200):
         """
-        Collect posts using activity-based strategy
+        Collect posts using activity-based strategy with error recovery
         
         Args:
             subreddit_config (dict): Configuration for different activity tiers
+            collect_comments (bool): Whether to collect comments for each post
+            max_comments (int): Maximum number of comments to collect per post
             
         Returns:
             list: All collected posts with tier information
         """
         all_posts = []
         collection_summary = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         for tier_name, config in subreddit_config.items():
             tier_posts = []
@@ -144,29 +208,36 @@ class RedditCollector:
             logging.info(f"Collecting {posts_per_sub} posts per subreddit, time_filter: {time_filter}")
             
             for subreddit in subreddits:
-                posts = self.collect_subreddit_posts(
-                    subreddit, 
-                    limit=posts_per_sub, 
-                    sort_type='top', 
-                    time_filter=time_filter
-                )
-                
-                # Apply additional filtering for low activity subreddits
-                # if tier_name == 'low_activity':
-                #     # Filter to roughly 3 days (72 hours) for low activity
-                #     original_count = len(posts)
-                #     posts = self.filter_posts_by_age(posts, max_hours=72)
-                #     if len(posts) < original_count:
-                #         logging.info(f"  - Filtered r/{subreddit}: {original_count} -> {len(posts)} posts (3-day limit)")
-                
-                # Add tier information to each post
-                for post in posts:
-                    post['activity_tier'] = tier_name
-                    post['tier_description'] = description
-                    post['target_posts'] = posts_per_sub
-                
-                tier_posts.extend(posts)
-                time.sleep(1)  # Be respectful between requests
+                try:
+                    logging.info(f"Processing r/{subreddit}...")
+                    posts = self.collect_subreddit_posts(
+                        subreddit, 
+                        limit=posts_per_sub, 
+                        sort_type='top', 
+                        time_filter=time_filter,
+                        collect_comments=collect_comments,
+                        max_comments=max_comments
+                    )
+                    
+                    # Add tier information to each post
+                    for post in posts:
+                        post['activity_tier'] = tier_name
+                        post['tier_description'] = description
+                        post['target_posts'] = posts_per_sub
+                    
+                    tier_posts.extend(posts)
+                    all_posts.extend(posts)  # Add to main collection immediately
+                    
+                    # Save progress after each subreddit
+                    if posts:
+                        self.save_progress(all_posts, f"progress_{timestamp}")
+                        logging.info(f"✓ Progress saved: {len(all_posts)} total posts collected")
+                    
+                    time.sleep(1)  # Be respectful between requests
+                    
+                except Exception as e:
+                    logging.error(f"Failed to collect from r/{subreddit}: {e}")
+                    logging.info("Continuing with next subreddit...")
             
             logging.info(f"{tier_name.replace('_', ' ').title()}: {len(tier_posts)} posts collected")
             collection_summary.append({
@@ -225,6 +296,16 @@ class RedditCollector:
             for key, value in json_post.items():
                 if isinstance(value, datetime):
                     json_post[key] = value.isoformat()
+                elif key == 'comments' and isinstance(value, list):
+                    # Handle datetime objects in comments
+                    json_comments = []
+                    for comment in value:
+                        json_comment = comment.copy()
+                        for comment_key, comment_value in json_comment.items():
+                            if isinstance(comment_value, datetime):
+                                json_comment[comment_key] = comment_value.isoformat()
+                        json_comments.append(json_comment)
+                    json_post[key] = json_comments
             json_posts.append(json_post)
         
         with open(filename, 'w', encoding='utf-8') as f:
@@ -232,53 +313,95 @@ class RedditCollector:
         
         logging.info(f"Saved {len(posts)} posts to {filename}")
 
-def daily_collection():
-    """Main function for daily data collection with activity-based strategy"""
+    def save_progress(self, posts, filename_prefix):
+        """Save progress to both CSV and JSON to prevent data loss"""
+        if not posts:
+            return
+        
+        try:
+            # Save CSV (faster, always works)
+            csv_filename = f"{filename_prefix}.csv"
+            df = pd.DataFrame(posts)
+            df.to_csv(csv_filename, index=False)
+            
+            # Save JSON (with proper datetime handling)
+            json_filename = f"{filename_prefix}.json"
+            json_posts = []
+            for post in posts:
+                json_post = post.copy()
+                for key, value in json_post.items():
+                    if isinstance(value, datetime):
+                        json_post[key] = value.isoformat()
+                    elif key == 'comments' and isinstance(value, list):
+                        json_comments = []
+                        for comment in value:
+                            json_comment = comment.copy()
+                            for comment_key, comment_value in json_comment.items():
+                                if isinstance(comment_value, datetime):
+                                    json_comment[comment_key] = comment_value.isoformat()
+                            json_comments.append(json_comment)
+                        json_post[key] = json_comments
+                json_posts.append(json_post)
+            
+            with open(json_filename, 'w', encoding='utf-8') as f:
+                json.dump(json_posts, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            logging.warning(f"Error saving progress: {e}")
+
+def daily_collection(collect_comments=False, max_comments=200):
+    """Main function for daily data collection with activity-based strategy
+    
+    Args:
+        collect_comments (bool): Whether to collect comments for each post
+        max_comments (int): Maximum number of comments to collect per post
+    """
     
     # Activity-based subreddit configuration
     SUBREDDIT_CONFIG = {
         # Tier 1: High Activity (1M+ members) - 150 posts, 24 hours
         'high_activity': {
-            'subreddits': ['datascience', 'marketing'],
+            'subreddits': ['datascience', 'marketing', 'startups', 'Entrepreneur'],
             'posts_per_sub': 150,
             'time_filter': 'week',  
             'description': '1M+ members'
         },
         
-        # Tier 2: Medium Activity (100K-1M members) - 100 posts, 24 hours  
+        # Tier 2: Medium Activity (100K-1M members) - DISABLED FOR TEST
         'medium_activity': {
             'subreddits': [
-                # 'dataengineering', 
                 'shopify', 'digital_marketing', 'PPC',
                 'analytics', 'BusinessIntelligence', 'PowerBI', 'FacebookAds',
-                'programacion', 'dataanalysis'   
+                'programacion', 'dataanalysis','AskMarketing','ProductManagement',
+                'SaaS'   
             ],
             'posts_per_sub': 100,
             'time_filter': 'week', 
             'description': '100K-1M members'
         },
         
-        # Tier 3: Low Activity (10K-100K members) - 50 posts, 3 days
+        # Tier 3: Low Activity - DISABLED FOR TEST
         'low_activity': {
             'subreddits': [
                 'tableau', 'GoogleAds', 'MarketingAutomation', 'GoogleAnalytics',
                 'bigquery', 'snowflake', 'GoogleDataStudio', 'databricks',
                 'nocode', 'devsarg', 'taquerosprogramadores', 'dataanalyst',             
-                'chileIT', 'automation'               
+                'chileIT', 'automation','datavisualization','Dynamics365',
+                'googlecloud','shopifyDev','roastmystartup'               
             ],
             'posts_per_sub': 50,
-            'time_filter': 'week',  # We'll filter to ~3 days in post-processing
+            'time_filter': 'week',
             'description': '10K-100K members'
         },
         
-        # Tier 4: Very Low Activity (<10K members) - 25 posts, 7 days
+        # Tier 4: Very Low Activity - DISABLED FOR TEST
         'very_low_activity': {
             'subreddits': [
                 'Looker', 'LinkedInAds', 'LookerStudio', 'Fivetran', 'datawarehouse', 'ETL',
                 'ColombiaDevs' 
             ],
             'posts_per_sub': 25,
-            'time_filter': 'week',  # 7 days
+            'time_filter': 'week',
             'description': '<10K members'
         }
     }
@@ -293,7 +416,7 @@ def daily_collection():
         logging.info("Starting activity-based Reddit data collection")
         logging.info("Strategy: More posts from active subreddits, longer timeframes for less active ones")
         
-        posts = collector.collect_activity_based(SUBREDDIT_CONFIG)
+        posts = collector.collect_activity_based(SUBREDDIT_CONFIG, collect_comments, max_comments)
         
         if posts:
             # Save data with activity-based naming
@@ -341,4 +464,11 @@ def daily_collection():
         logging.error(f"Daily collection failed: {e}")
 
 if __name__ == "__main__":
-    daily_collection()
+    # To collect posts WITHOUT comments (default):
+    # daily_collection()
+    
+    # To collect posts WITH top 200 comments per post:
+    daily_collection(collect_comments=True, max_comments=200)
+    
+    # To collect posts WITH top 50 comments per post:  
+    # daily_collection(collect_comments=True, max_comments=50)
