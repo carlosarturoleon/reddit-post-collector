@@ -256,47 +256,188 @@ class RedditSearchCollector:
         
         logging.info(f"Saved {len(posts)} posts to {filename}")
 
+    def hybrid_search(self, target_keywords, broad_terms, relevant_subreddits=None, 
+                     limit_per_term=100, collect_comments=True, max_comments=200):
+        """
+        Hybrid search: broad terms + keyword filtering for wider coverage
+        
+        Args:
+            target_keywords (list): Specific keywords to find in posts/comments
+            broad_terms (list): Broader search terms to cast a wider net
+            relevant_subreddits (list): Optional list of relevant subreddits to search
+            limit_per_term (int): Posts to collect per broad term
+            collect_comments (bool): Whether to collect comments
+            max_comments (int): Max comments per post
+            
+        Returns:
+            list: Posts containing target keywords in title/content/comments
+        """
+        all_matches = []
+        seen_ids = set()
+        target_keywords_lower = [kw.lower() for kw in target_keywords]
+        
+        logging.info(f"Starting hybrid search:")
+        logging.info(f"  Target keywords: {target_keywords}")
+        logging.info(f"  Broad search terms: {broad_terms}")
+        logging.info(f"  Relevant subreddits: {relevant_subreddits or 'All Reddit'}")
+        
+        # Search locations: specific subreddits + all Reddit
+        search_locations = []
+        if relevant_subreddits:
+            search_locations.extend([(sub, f"r/{sub}") for sub in relevant_subreddits])
+        search_locations.append((None, "all Reddit"))
+        
+        for subreddit, location_name in search_locations:
+            for broad_term in broad_terms:
+                try:
+                    logging.info(f"Searching {location_name} for '{broad_term}'...")
+                    
+                    posts = self.search_reddit(
+                        query=broad_term,
+                        sort="relevance", 
+                        time_filter="month",
+                        limit=limit_per_term,
+                        subreddit=subreddit,
+                        collect_comments=collect_comments,
+                        max_comments=max_comments
+                    )
+                    
+                    # Filter posts that contain target keywords
+                    matches = []
+                    for post in posts:
+                        if post['id'] in seen_ids:
+                            continue
+                            
+                        # Check title and selftext
+                        text_to_search = f"{post['title']} {post['selftext']}".lower()
+                        found_in_post = any(keyword in text_to_search for keyword in target_keywords_lower)
+                        
+                        # Check comments if available
+                        found_in_comments = False
+                        if post['comments']:
+                            for comment in post['comments']:
+                                comment_text = comment['body'].lower()
+                                if any(keyword in comment_text for keyword in target_keywords_lower):
+                                    found_in_comments = True
+                                    break
+                        
+                        if found_in_post or found_in_comments:
+                            post['found_in_post'] = found_in_post
+                            post['found_in_comments'] = found_in_comments
+                            post['matched_keywords'] = [kw for kw in target_keywords_lower 
+                                                       if kw in text_to_search or 
+                                                       (post['comments'] and any(kw in c['body'].lower() for c in post['comments']))]
+                            post['broad_search_term'] = broad_term
+                            post['search_location'] = location_name
+                            matches.append(post)
+                            seen_ids.add(post['id'])
+                    
+                    logging.info(f"  Found {len(matches)} posts with target keywords")
+                    all_matches.extend(matches)
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    logging.error(f"Error searching {location_name} for '{broad_term}': {e}")
+                    continue
+        
+        logging.info(f"Hybrid search complete: {len(all_matches)} total matches found")
+        return all_matches
+
 def data_tools_search():
-    """Search for data engineering and analytics tools"""
+    """Search for data engineering and analytics tools using hybrid approach"""
     try:
         collector = RedditSearchCollector()
         
-        # Your specific keywords
-        keywords = ["airbyte", "bigquery", "elt", "etl", "fivetran", "supermetrics", "windsor.ai"]
+        # Your specific target keywords
+        target_keywords = ["airbyte", "bigquery", "elt", "etl", "fivetran", "supermetrics", "windsor.ai"]
         
-        # Search across all Reddit
-        posts = collector.multi_keyword_search(
-            keywords=keywords,
-            sort="relevance",
-            limit=50,  # 50 posts per keyword
+        # Broader search terms to cast a wider net
+        broad_terms = [
+            "data pipeline tools",
+            "ETL solutions", 
+            "data integration platform",
+            "business intelligence tools",
+            "data warehouse tools",
+            "analytics stack",
+            "data connector",
+            "data sync tools",
+            "marketing data tools"
+        ]
+        
+        # Relevant subreddits for data engineering discussions
+        relevant_subreddits = [
+            # "dataengineering",
+            "analytics", 
+            "BusinessIntelligence",
+            "bigquery",
+            "snowflake",
+            "datascience",
+            "dataanalysis",
+            "PowerBI",
+            "tableau",
+            "marketing",
+            "digital_marketing",
+            "MarketingAutomation"
+        ]
+        
+        # Hybrid search approach
+        posts = collector.hybrid_search(
+            target_keywords=target_keywords,
+            broad_terms=broad_terms,
+            relevant_subreddits=relevant_subreddits,
+            limit_per_term=30,  # 30 posts per broad term per location
             collect_comments=True,
             max_comments=200
         )
         
         if posts:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            collector.save_to_csv(posts, f"data_tools_search_{timestamp}.csv")
-            collector.save_to_json(posts, f"data_tools_search_{timestamp}.json")
+            collector.save_to_csv(posts, f"data_tools_hybrid_search_{timestamp}.csv")
+            collector.save_to_json(posts, f"data_tools_hybrid_search_{timestamp}.json")
             
             df = pd.DataFrame(posts)
-            logging.info(f"\n=== DATA TOOLS SEARCH RESULTS ===")
-            logging.info(f"- Total posts: {len(df)}")
+            logging.info(f"\n=== HYBRID SEARCH RESULTS ===")
+            logging.info(f"- Total matching posts: {len(df)}")
             logging.info(f"- Unique subreddits: {df['subreddit'].nunique()}")
             logging.info(f"- Average score: {df['score'].mean():.2f}")
             logging.info(f"- Average age (days): {df['days_ago'].mean():.1f}")
             logging.info(f"- Posts with comments: {df[df['comments_collected'] > 0].shape[0]}")
             
-            # Results by keyword
-            logging.info(f"\n--- Posts by Keyword ---")
-            keyword_counts = df['search_query'].value_counts()
-            logging.info(f"\n{keyword_counts}")
+            # Analysis by match type
+            logging.info(f"\n--- Match Analysis ---")
+            found_in_post = df[df['found_in_post']].shape[0]
+            found_in_comments = df[df['found_in_comments']].shape[0]
+            logging.info(f"Keywords found in post title/content: {found_in_post}")
+            logging.info(f"Keywords found in comments: {found_in_comments}")
+            logging.info(f"Found in both: {df[df['found_in_post'] & df['found_in_comments']].shape[0]}")
             
-            # Top subreddits
-            logging.info(f"\n--- Top Subreddits ---")
+            # Results by broad search term
+            logging.info(f"\n--- Posts by Broad Search Term ---")
+            broad_term_counts = df['broad_search_term'].value_counts()
+            logging.info(f"\n{broad_term_counts}")
+            
+            # Results by search location
+            logging.info(f"\n--- Posts by Search Location ---")
+            location_counts = df['search_location'].value_counts()
+            logging.info(f"\n{location_counts}")
+            
+            # Top subreddits with matches
+            logging.info(f"\n--- Top Subreddits with Matches ---")
             logging.info(f"\n{df['subreddit'].value_counts().head(10)}")
             
+            # Matched keywords frequency
+            all_matched_keywords = []
+            for keywords_list in df['matched_keywords']:
+                all_matched_keywords.extend(keywords_list)
+            if all_matched_keywords:
+                from collections import Counter
+                keyword_freq = Counter(all_matched_keywords)
+                logging.info(f"\n--- Most Mentioned Target Keywords ---")
+                for keyword, count in keyword_freq.most_common():
+                    logging.info(f"{keyword}: {count} mentions")
+            
         else:
-            logging.warning("No posts found")
+            logging.warning("No posts found matching target keywords")
             
     except Exception as e:
         logging.error(f"Data tools search failed: {e}")
