@@ -73,6 +73,21 @@ class RedditDataAnalyzer:
             if file_path.endswith('.csv'):
                 df = pd.read_csv(file_path)
                 logging.info(f"Loaded {len(df)} posts from CSV: {file_path}")
+                
+                # Deserialize JSON-encoded comments back to lists
+                if 'comments' in df.columns:
+                    def deserialize_comments(comments_json):
+                        try:
+                            if pd.isna(comments_json) or comments_json == '':
+                                return []
+                            if isinstance(comments_json, str):
+                                return json.loads(comments_json)
+                            return comments_json if isinstance(comments_json, list) else []
+                        except (json.JSONDecodeError, TypeError):
+                            return []
+                    
+                    df['comments'] = df['comments'].apply(deserialize_comments)
+                    
             elif file_path.endswith('.json'):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -590,7 +605,7 @@ class RedditDataAnalyzer:
             'bigquery', 'snowflake', 'redshift', 'databricks', 'looker studio',
             'power bi', 'powerbi', 'tableau', 'google sheets', 'excel',
             'amazon s3', 'azure blob', 'postgresql', 'mysql', 'sql server',
-            'python', 'windsor.ai'
+            'python', 'r language', 'jupyter', 'notebooks'
         ]
         
         # Define implementation/integration keywords
@@ -731,10 +746,104 @@ class RedditDataAnalyzer:
             df_filtered = df_filtered[df_filtered['subreddit'].isin(thresholds['subreddits'])]
             logging.info(f"Subreddit filter: {len(df_filtered)} posts remaining")
         
+        # Filter out posts mentioning specific companies/terms in comments
+        if 'exclude_keywords' in thresholds and thresholds['exclude_keywords']:
+            if 'comments' in df_filtered.columns:
+                initial_count = len(df_filtered)
+                excluded_keywords = thresholds['exclude_keywords']
+                df_filtered = df_filtered[~df_filtered.apply(lambda row: self._has_keywords_in_comments(row, excluded_keywords), axis=1)]
+                excluded_count = initial_count - len(df_filtered)
+                if excluded_count > 0:
+                    logging.info(f"Excluded {excluded_count} posts mentioning excluded keywords in comments: {len(df_filtered)} posts remaining")
+        
         filtered_count = len(df_filtered)
         logging.info(f"Filtering complete: {filtered_count}/{original_count} posts passed thresholds ({filtered_count/original_count*100:.1f}%)")
         
         return df_filtered
+    
+    def _has_keywords_in_comments(self, row, exclude_keywords):
+        """Check if a post has specific keywords/company mentions in comments"""
+        if not row.get('comments') or row['comments_collected'] == 0:
+            return False
+        
+        try:
+            comments = row['comments']
+            if isinstance(comments, str):
+                return False  # Can't check string data
+            
+            # Convert keywords to lowercase for case-insensitive matching
+            keywords_lower = [keyword.lower() for keyword in exclude_keywords]
+            
+            for comment in comments:
+                if isinstance(comment, dict) and 'body' in comment:
+                    comment_text = comment['body'].lower()
+                    if any(keyword in comment_text for keyword in keywords_lower):
+                        return True
+            
+            return False
+            
+        except Exception:
+            return False  # Safe fallback
+    
+    def apply_final_sorting(self, df):
+        """
+        Apply final sorting to prioritize best content for output
+        
+        Returns:
+            pd.DataFrame: Sorted dataframe with best content first
+        """
+        if df.empty:
+            return df
+        
+        df_sorted = df.copy()
+        
+        # Create composite sorting criteria
+        sort_columns = []
+        sort_ascending = []
+        
+        # Primary: Relevance score (if available)
+        if 'relevance_score' in df_sorted.columns:
+            sort_columns.append('relevance_score')
+            sort_ascending.append(False)  # Highest first
+        
+        # Secondary: Sentiment class (positive first)
+        if 'overall_sentiment_class' in df_sorted.columns:
+            # Create numerical sentiment for sorting: positive=3, neutral=2, negative=1
+            sentiment_order = {'positive': 3, 'neutral': 2, 'negative': 1}
+            df_sorted['_sentiment_order'] = df_sorted['overall_sentiment_class'].map(sentiment_order).fillna(2)
+            sort_columns.append('_sentiment_order')
+            sort_ascending.append(False)  # Positive first
+        
+        # Tertiary: Engagement score
+        if 'engagement_score' in df_sorted.columns:
+            sort_columns.append('engagement_score')
+            sort_ascending.append(False)  # Highest first
+        
+        # Quaternary: Reddit score
+        if 'score' in df_sorted.columns:
+            sort_columns.append('score')
+            sort_ascending.append(False)  # Highest first
+        
+        # Final: Recency (most recent first)
+        if 'hours_ago' in df_sorted.columns:
+            sort_columns.append('hours_ago')
+            sort_ascending.append(True)  # Lowest hours_ago = most recent
+        elif 'days_ago' in df_sorted.columns:
+            sort_columns.append('days_ago')
+            sort_ascending.append(True)  # Lowest days_ago = most recent
+        
+        # Apply sorting
+        if sort_columns:
+            df_sorted = df_sorted.sort_values(sort_columns, ascending=sort_ascending)
+            
+            # Remove temporary sorting column
+            if '_sentiment_order' in df_sorted.columns:
+                df_sorted = df_sorted.drop('_sentiment_order', axis=1)
+            
+            logging.info(f"📊 Final sorting applied with criteria: {sort_columns}")
+            logging.info(f"   Best content prioritized: relevance → sentiment → engagement → recency")
+        
+        return df_sorted
     
     def generate_analysis_report(self, df):
         """Generate comprehensive analysis report"""
@@ -788,26 +897,34 @@ class RedditDataAnalyzer:
                         f"Avg Comments: {stats['avg_comments']:.1f}, "
                         f"Avg Engagement: {stats['avg_engagement']:.1f}")
     
-    def save_analysis_results(self, df, filename_prefix):
-        """Save analyzed data to CSV and JSON"""
+    def save_analysis_results(self, df, filename_prefix, save_json=False):
+        """Save analyzed data to CSV and optionally JSON in analysis folder"""
+        # Create analysis folder if it doesn't exist
+        output_folder = "analysis_results"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+            logging.info(f"Created output folder: {output_folder}")
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Save CSV
-        csv_filename = f"{filename_prefix}_analyzed_{timestamp}.csv"
+        csv_filename = os.path.join(output_folder, f"{filename_prefix}_analyzed_{timestamp}.csv")
         df.to_csv(csv_filename, index=False)
         logging.info(f"Saved analyzed data to: {csv_filename}")
         
-        # Save JSON
-        json_filename = f"{filename_prefix}_analyzed_{timestamp}.json"
-        df_json = df.copy()
-        
-        # Convert datetime columns to strings
-        for col in df_json.columns:
-            if df_json[col].dtype == 'datetime64[ns]':
-                df_json[col] = df_json[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        df_json.to_json(json_filename, indent=2, orient='records')
-        logging.info(f"Saved analyzed data to: {json_filename}")
+        # Save JSON (optional)
+        json_filename = None
+        if save_json:
+            json_filename = os.path.join(output_folder, f"{filename_prefix}_analyzed_{timestamp}.json")
+            df_json = df.copy()
+            
+            # Convert datetime columns to strings
+            for col in df_json.columns:
+                if df_json[col].dtype == 'datetime64[ns]':
+                    df_json[col] = df_json[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+            df_json.to_json(json_filename, indent=2, orient='records')
+            logging.info(f"Saved analyzed data to: {json_filename}")
         
         return csv_filename, json_filename
 
@@ -851,16 +968,20 @@ def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=No
         else:
             df_filtered = df_scored
         
+        # Apply final sorting to prioritize best content
+        df_final = analyzer.apply_final_sorting(df_filtered)
+        
         # Generate analysis report
-        analyzer.generate_analysis_report(df_filtered)
+        analyzer.generate_analysis_report(df_final)
         
         # Save results
         base_filename = os.path.splitext(os.path.basename(file_path))[0]
-        csv_file, json_file = analyzer.save_analysis_results(df_filtered, base_filename)
+        csv_file, json_file = analyzer.save_analysis_results(df_final, base_filename, save_json=False)
         
         logging.info(f"\nAnalysis complete! Results saved to:")
         logging.info(f"- {csv_file}")
-        logging.info(f"- {json_file}")
+        if json_file:
+            logging.info(f"- {json_file}")
         
         return df_filtered
         
@@ -868,19 +989,93 @@ def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=No
         logging.error(f"Analysis failed: {e}")
         return None
 
+def analyze_combined_reddit_data(file_paths, engagement_weights=None, filter_thresholds=None):
+    """
+    Combine multiple Reddit data files and analyze them together
+    
+    Args:
+        file_paths (list): List of file paths to combine and analyze
+        engagement_weights (dict): Custom engagement score weights
+        filter_thresholds (dict): Filtering thresholds
+    """
+    try:
+        analyzer = RedditDataAnalyzer()
+        combined_df = pd.DataFrame()
+        
+        # Load and combine all files
+        logging.info(f"Loading and combining {len(file_paths)} files...")
+        for file_path in file_paths:
+            logging.info(f"Loading: {os.path.basename(file_path)}")
+            df = analyzer.load_data(file_path)
+            if df is not None and not df.empty:
+                # Add source file info
+                df['source_file'] = os.path.basename(file_path)
+                combined_df = pd.concat([combined_df, df], ignore_index=True)
+            else:
+                logging.warning(f"Skipped empty or invalid file: {file_path}")
+        
+        if combined_df.empty:
+            logging.error("No data loaded from any files")
+            return None
+            
+        logging.info(f"Combined dataset: {len(combined_df)} total posts from {len(file_paths)} files")
+        
+        # Perform sentiment analysis
+        logging.info("Performing sentiment analysis on combined data...")
+        combined_df = analyzer.add_sentiment_analysis(combined_df)
+        
+        # Perform topic modeling
+        logging.info("Performing topic modeling on combined data...")
+        combined_df = analyzer.perform_topic_modeling(combined_df)
+        
+        # Filter by primary relevance (business focus)
+        logging.info("Applying primary relevance filter...")
+        combined_df = analyzer.filter_by_relevance(combined_df)
+        
+        # Calculate engagement scores
+        logging.info("Calculating engagement scores...")
+        combined_df = analyzer.calculate_engagement_score(combined_df, engagement_weights)
+        
+        # Apply filtering thresholds
+        if filter_thresholds:
+            logging.info("Applying quality thresholds...")
+            combined_df = analyzer.filter_by_thresholds(combined_df, filter_thresholds)
+        
+        # Apply final sorting to prioritize best content
+        combined_df = analyzer.apply_final_sorting(combined_df)
+        
+        # Generate analysis report
+        analyzer.generate_analysis_report(combined_df)
+        
+        # Save results with combined filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        combined_filename = f"reddit_combined_analysis_{timestamp}"
+        csv_file, json_file = analyzer.save_analysis_results(combined_df, combined_filename, save_json=False)
+        
+        logging.info(f"\nCombined analysis complete! Results saved to:")
+        logging.info(f"- {csv_file}")
+        if json_file:
+            logging.info(f"- {json_file}")
+        
+        return combined_df
+        
+    except Exception as e:
+        logging.error(f"Combined analysis failed: {e}")
+        return None
+
 if __name__ == "__main__":
     # Example usage - analyze most recent data file
     print("Starting Reddit Data Analyzer...")
     logging.info("Reddit Data Analyzer starting...")
     
-    # Find most recent data files
-    csv_files = glob.glob("*.csv")
-    json_files = glob.glob("*.json")
-    print(f"Found {len(csv_files)} CSV files and {len(json_files)} JSON files")
+    # Find most recent data files in analysis_results folder (CSV only by default)
+    csv_files = glob.glob("analysis_results/*.csv")
+    print(f"Found {len(csv_files)} CSV files")
     
-    # Filter for Reddit data files
-    reddit_files = [f for f in csv_files + json_files if any(keyword in f.lower() 
-                   for keyword in ['reddit', 'data_tools', 'activity_based', 'hybrid_search'])]
+    # Filter for Reddit data files (exclude already analyzed files)
+    reddit_files = [f for f in csv_files if any(keyword in f.lower() 
+                   for keyword in ['reddit', 'data_tools', 'activity_based', 'hybrid_search']) 
+                   and '_analyzed_' not in f.lower()]
     
     if reddit_files:
         print(f"Found {len(reddit_files)} Reddit data files:")
@@ -889,7 +1084,7 @@ if __name__ == "__main__":
             print(f"  - {f}")
             logging.info(f"  - {f}")
         
-        # Analyze multiple files or just the latest
+        # Analyze files individually (one output per input file)
         files_to_analyze = reddit_files[:3]  # Analyze up to 3 most recent files
         
         for file_path in sorted(files_to_analyze, key=os.path.getctime, reverse=True):
@@ -912,7 +1107,8 @@ if __name__ == "__main__":
                     'min_score': 3,                
                     'min_comments': 1,             
                     'min_upvote_ratio': 0.55,      
-                    'max_days_ago': 14             
+                    'max_days_ago': 14,
+                    # 'exclude_keywords': ['company_name', 'product_name']  # Optional: Filter out specific company/product mentions
                 }
             elif 'hybrid_search' in file_path.lower() or 'search' in file_path.lower():
                 # Search-based collection - focus on relevance and quality
@@ -928,7 +1124,8 @@ if __name__ == "__main__":
                     'min_score': 5,                
                     'min_comments': 2,             
                     'min_upvote_ratio': 0.65,      # Higher threshold
-                    'max_days_ago': 10             
+                    'max_days_ago': 10,
+                    # 'exclude_keywords': ['company_name', 'product_name']  # Optional: Filter out specific company/product mentions
                 }
             else:
                 # Default weights
@@ -944,7 +1141,8 @@ if __name__ == "__main__":
                     'min_score': 5,                
                     'min_comments': 2,             
                     'min_upvote_ratio': 0.6,       
-                    'max_days_ago': 10             
+                    'max_days_ago': 10,             
+                    # 'exclude_keywords': ['company_name', 'product_name']  # Optional: Filter out specific mentions
                 }
             
             # Run analysis
@@ -965,7 +1163,7 @@ if __name__ == "__main__":
         print("No Reddit data files found in current directory")
         print("Looking for files with keywords: reddit, data_tools, activity_based, hybrid_search")
         print(f"All CSV files: {csv_files}")
-        print(f"All JSON files: {json_files}")
+        print(f"Available CSV files: {csv_files}")
         logging.warning("No Reddit data files found in current directory")
         logging.info("To analyze specific file, run:")
         logging.info("python reddit_data_analyzer.py")

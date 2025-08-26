@@ -8,6 +8,8 @@ import praw
 import pandas as pd
 import logging
 import json
+import csv
+import os
 from datetime import datetime, timezone
 import time
 
@@ -248,7 +250,8 @@ class RedditCollector:
                 'actual_total': len(tier_posts)
             })
             
-            all_posts.extend(tier_posts)
+            # Posts already added to all_posts in the inner loop (line 231)
+            # Removed duplicate: all_posts.extend(tier_posts)
         
         # Log collection summary
         logging.info(f"\n=== COLLECTION SUMMARY ===")
@@ -266,28 +269,60 @@ class RedditCollector:
         return all_posts
     
     def save_to_csv(self, posts, filename=None):
-        """Save posts to CSV file"""
+        """Save posts to CSV file in analysis_results folder with proper comments serialization"""
         if not posts:
             logging.warning("No posts to save")
             return
+        
+        # Create analysis_results folder if it doesn't exist
+        output_folder = "analysis_results"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
         
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"reddit_posts_{timestamp}.csv"
         
-        df = pd.DataFrame(posts)
-        df.to_csv(filename, index=False)
-        logging.info(f"Saved {len(posts)} posts to {filename}")
+        # Save to analysis_results folder
+        filepath = os.path.join(output_folder, filename)
+        
+        # Prepare posts for CSV by serializing complex data
+        csv_posts = []
+        for post in posts:
+            csv_post = post.copy()
+            
+            # Convert datetime objects to strings
+            for key, value in csv_post.items():
+                if isinstance(value, datetime):
+                    csv_post[key] = value.isoformat()
+                elif key == 'comments' and isinstance(value, list):
+                    # Serialize comments as JSON string to prevent CSV corruption
+                    # Use separators to minimize whitespace and ensure_ascii to avoid encoding issues
+                    csv_post[key] = json.dumps(value, default=str, separators=(',', ':'), ensure_ascii=True)
+            
+            csv_posts.append(csv_post)
+        
+        df = pd.DataFrame(csv_posts)
+        df.to_csv(filepath, index=False, escapechar='\\', quoting=csv.QUOTE_NONNUMERIC)
+        logging.info(f"Saved {len(posts)} posts to {filepath}")
     
     def save_to_json(self, posts, filename=None):
-        """Save posts to JSON file"""
+        """Save posts to JSON file in analysis_results folder"""
         if not posts:
             logging.warning("No posts to save")
             return
         
+        # Create analysis_results folder if it doesn't exist
+        output_folder = "analysis_results"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+        
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"reddit_posts_{timestamp}.json"
+        
+        # Save to analysis_results folder
+        filepath = os.path.join(output_folder, filename)
         
         # Convert datetime objects to strings for JSON serialization
         json_posts = []
@@ -308,46 +343,89 @@ class RedditCollector:
                     json_post[key] = json_comments
             json_posts.append(json_post)
         
-        with open(filename, 'w', encoding='utf-8') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(json_posts, f, indent=2, ensure_ascii=False)
         
-        logging.info(f"Saved {len(posts)} posts to {filename}")
+        logging.info(f"Saved {len(posts)} posts to {filepath}")
 
-    def save_progress(self, posts, filename_prefix):
-        """Save progress to both CSV and JSON to prevent data loss"""
+    def save_progress(self, posts, filename_prefix, save_json=False):
+        """Save progress to CSV (and optionally JSON) to prevent data loss in analysis_results folder"""
         if not posts:
             return
         
         try:
-            # Save CSV (faster, always works)
-            csv_filename = f"{filename_prefix}.csv"
-            df = pd.DataFrame(posts)
-            df.to_csv(csv_filename, index=False)
+            # Create analysis_results folder if it doesn't exist
+            output_folder = "analysis_results"
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
             
-            # Save JSON (with proper datetime handling)
-            json_filename = f"{filename_prefix}.json"
-            json_posts = []
+            # Save CSV (with proper comments serialization)
+            csv_filename = os.path.join(output_folder, f"{filename_prefix}.csv")
+            csv_posts = []
             for post in posts:
-                json_post = post.copy()
-                for key, value in json_post.items():
+                csv_post = post.copy()
+                for key, value in csv_post.items():
                     if isinstance(value, datetime):
-                        json_post[key] = value.isoformat()
+                        csv_post[key] = value.isoformat()
                     elif key == 'comments' and isinstance(value, list):
-                        json_comments = []
-                        for comment in value:
-                            json_comment = comment.copy()
-                            for comment_key, comment_value in json_comment.items():
-                                if isinstance(comment_value, datetime):
-                                    json_comment[comment_key] = comment_value.isoformat()
-                            json_comments.append(json_comment)
-                        json_post[key] = json_comments
-                json_posts.append(json_post)
+                        csv_post[key] = json.dumps(value, default=str, separators=(',', ':'), ensure_ascii=True)
+                csv_posts.append(csv_post)
             
-            with open(json_filename, 'w', encoding='utf-8') as f:
-                json.dump(json_posts, f, indent=2, ensure_ascii=False)
+            df = pd.DataFrame(csv_posts)
+            df.to_csv(csv_filename, index=False, escapechar='\\', quoting=csv.QUOTE_NONNUMERIC)
+            
+            # Save JSON (optional, disabled by default)
+            if save_json:
+                json_filename = os.path.join(output_folder, f"{filename_prefix}.json")
+                json_posts = []
+                for post in posts:
+                    json_post = post.copy()
+                    for key, value in json_post.items():
+                        if isinstance(value, datetime):
+                            json_post[key] = value.isoformat()
+                        elif key == 'comments' and isinstance(value, list):
+                            json_comments = []
+                            for comment in value:
+                                json_comment = comment.copy()
+                                for comment_key, comment_value in json_comment.items():
+                                    if isinstance(comment_value, datetime):
+                                        json_comment[comment_key] = comment_value.isoformat()
+                                json_comments.append(json_comment)
+                            json_post[key] = json_comments
+                    json_posts.append(json_post)
+                
+                with open(json_filename, 'w', encoding='utf-8') as f:
+                    json.dump(json_posts, f, indent=2, ensure_ascii=False)
                 
         except Exception as e:
             logging.warning(f"Error saving progress: {e}")
+    
+    def cleanup_progress_files(self):
+        """Clean up progress files after successful final save"""
+        try:
+            output_folder = "analysis_results"
+            if not os.path.exists(output_folder):
+                return
+            
+            # Find and delete progress files
+            import glob
+            progress_files = glob.glob(os.path.join(output_folder, "progress_*.csv")) + \
+                           glob.glob(os.path.join(output_folder, "progress_*.json"))
+            
+            deleted_count = 0
+            for progress_file in progress_files:
+                try:
+                    os.remove(progress_file)
+                    deleted_count += 1
+                    logging.info(f"🗑️  Cleaned up progress file: {os.path.basename(progress_file)}")
+                except Exception as e:
+                    logging.warning(f"Could not delete progress file {progress_file}: {e}")
+            
+            if deleted_count > 0:
+                logging.info(f"✨ Cleaned up {deleted_count} progress files")
+            
+        except Exception as e:
+            logging.warning(f"Error during progress file cleanup: {e}")
 
 def daily_collection(collect_comments=False, max_comments=200):
     """Main function for daily data collection with activity-based strategy
@@ -361,7 +439,12 @@ def daily_collection(collect_comments=False, max_comments=200):
     SUBREDDIT_CONFIG = {
         # Tier 1: High Activity (1M+ members) - 150 posts, 24 hours
         'high_activity': {
-            'subreddits': ['datascience', 'marketing', 'startups', 'Entrepreneur'],
+            'subreddits': [
+                'datascience', 
+                'marketing', 
+                'startups', 
+                'Entrepreneur'
+                ],
             'posts_per_sub': 150,
             'time_filter': 'week',  
             'description': '1M+ members'
@@ -373,7 +456,7 @@ def daily_collection(collect_comments=False, max_comments=200):
                 'shopify', 'digital_marketing', 'PPC',
                 'analytics', 'BusinessIntelligence', 'PowerBI', 'FacebookAds',
                 'programacion', 'dataanalysis','AskMarketing','ProductManagement',
-                'SaaS'   
+                'SaaS','ecommerce'   
             ],
             'posts_per_sub': 100,
             'time_filter': 'week', 
@@ -387,7 +470,7 @@ def daily_collection(collect_comments=False, max_comments=200):
                 'bigquery', 'snowflake', 'GoogleDataStudio', 'databricks',
                 'nocode', 'devsarg', 'taquerosprogramadores', 'dataanalyst',             
                 'chileIT', 'automation','datavisualization','Dynamics365',
-                'googlecloud','shopifyDev','roastmystartup'               
+                'googlecloud','shopifyDev','roastmystartup','agency'               
             ],
             'posts_per_sub': 50,
             'time_filter': 'week',
@@ -422,7 +505,11 @@ def daily_collection(collect_comments=False, max_comments=200):
             # Save data with activity-based naming
             timestamp = datetime.now().strftime("%Y%m%d")
             collector.save_to_csv(posts, f"reddit_activity_based_{timestamp}.csv")
-            collector.save_to_json(posts, f"reddit_activity_based_{timestamp}.json")
+            # JSON output disabled by default
+            # collector.save_to_json(posts, f"reddit_activity_based_{timestamp}.json")
+            
+            # Clean up progress files after successful final save
+            collector.cleanup_progress_files()
             
             # Enhanced analysis for activity-based collection
             df = pd.DataFrame(posts)

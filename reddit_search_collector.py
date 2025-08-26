@@ -8,6 +8,8 @@ import praw
 import pandas as pd
 import logging
 import json
+import csv
+import os
 from datetime import datetime, timezone
 import time
 
@@ -210,28 +212,60 @@ class RedditSearchCollector:
         return all_posts
 
     def save_to_csv(self, posts, filename=None):
-        """Save posts to CSV file"""
+        """Save posts to CSV file in analysis_results folder with proper comments serialization"""
         if not posts:
             logging.warning("No posts to save")
             return
+        
+        # Create analysis_results folder if it doesn't exist
+        output_folder = "analysis_results"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
         
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"reddit_search_{timestamp}.csv"
         
-        df = pd.DataFrame(posts)
-        df.to_csv(filename, index=False)
-        logging.info(f"Saved {len(posts)} posts to {filename}")
+        # Save to analysis_results folder
+        filepath = os.path.join(output_folder, filename)
+        
+        # Prepare posts for CSV by serializing complex data
+        csv_posts = []
+        for post in posts:
+            csv_post = post.copy()
+            
+            # Convert datetime objects to strings
+            for key, value in csv_post.items():
+                if isinstance(value, datetime):
+                    csv_post[key] = value.isoformat()
+                elif key == 'comments' and isinstance(value, list):
+                    # Serialize comments as JSON string to prevent CSV corruption
+                    # Use separators to minimize whitespace and ensure_ascii to avoid encoding issues
+                    csv_post[key] = json.dumps(value, default=str, separators=(',', ':'), ensure_ascii=True)
+            
+            csv_posts.append(csv_post)
+        
+        df = pd.DataFrame(csv_posts)
+        df.to_csv(filepath, index=False, escapechar='\\', quoting=csv.QUOTE_NONNUMERIC)
+        logging.info(f"Saved {len(posts)} posts to {filepath}")
     
     def save_to_json(self, posts, filename=None):
-        """Save posts to JSON file"""
+        """Save posts to JSON file in analysis_results folder"""
         if not posts:
             logging.warning("No posts to save")
             return
         
+        # Create analysis_results folder if it doesn't exist
+        output_folder = "analysis_results"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+        
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"reddit_search_{timestamp}.json"
+        
+        # Save to analysis_results folder
+        filepath = os.path.join(output_folder, filename)
         
         json_posts = []
         for post in posts:
@@ -251,10 +285,37 @@ class RedditSearchCollector:
                     json_post[key] = json_comments
             json_posts.append(json_post)
         
-        with open(filename, 'w', encoding='utf-8') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(json_posts, f, indent=2, ensure_ascii=False)
         
-        logging.info(f"Saved {len(posts)} posts to {filename}")
+        logging.info(f"Saved {len(posts)} posts to {filepath}")
+
+    def cleanup_progress_files(self):
+        """Clean up any temporary/progress files after successful save"""
+        try:
+            output_folder = "analysis_results"
+            if not os.path.exists(output_folder):
+                return
+            
+            # Find and delete any temporary search files
+            import glob
+            temp_files = glob.glob(os.path.join(output_folder, "*_temp_*.csv")) + \
+                        glob.glob(os.path.join(output_folder, "*_temp_*.json"))
+            
+            deleted_count = 0
+            for temp_file in temp_files:
+                try:
+                    os.remove(temp_file)
+                    deleted_count += 1
+                    logging.info(f"🗑️  Cleaned up temp file: {os.path.basename(temp_file)}")
+                except Exception as e:
+                    logging.warning(f"Could not delete temp file {temp_file}: {e}")
+            
+            if deleted_count > 0:
+                logging.info(f"✨ Cleaned up {deleted_count} temporary files")
+                
+        except Exception as e:
+            logging.warning(f"Error during temp file cleanup: {e}")
 
     def hybrid_search(self, target_keywords, broad_terms, relevant_subreddits=None, 
                      limit_per_term=100, collect_comments=True, max_comments=200):
@@ -348,8 +409,8 @@ def data_tools_search():
     try:
         collector = RedditSearchCollector()
         
-        # Your specific target keywords
-        target_keywords = ["airbyte", "bigquery", "elt", "etl", "fivetran", "supermetrics", "windsor.ai"]
+        # Replace with your specific target keywords
+        target_keywords = ["data tools", "bigquery", "elt", "etl", "data pipeline", "data integration"]
         
         # Broader search terms to cast a wider net
         broad_terms = [
@@ -393,7 +454,11 @@ def data_tools_search():
         if posts:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             collector.save_to_csv(posts, f"data_tools_hybrid_search_{timestamp}.csv")
-            collector.save_to_json(posts, f"data_tools_hybrid_search_{timestamp}.json")
+            # JSON output disabled by default
+            # collector.save_to_json(posts, f"data_tools_hybrid_search_{timestamp}.json")
+            
+            # Clean up any temporary files after successful save
+            collector.cleanup_progress_files()
             
             df = pd.DataFrame(posts)
             logging.info(f"\n=== HYBRID SEARCH RESULTS ===")

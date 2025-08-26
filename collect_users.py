@@ -114,7 +114,7 @@ def collect_target_users():
     # Initialize collector
     collector = RedditCollector()
     
-    # Target usernames
+    # Target usernames - Replace with actual usernames you want to collect
     target_users = ['target_user1', 'target_user2']
     
     all_comments = []
