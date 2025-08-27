@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import logging
 import json
+import sys
 from datetime import datetime
 import os
 import glob
@@ -71,22 +72,36 @@ class RedditDataAnalyzer:
         """
         try:
             if file_path.endswith('.csv'):
-                df = pd.read_csv(file_path)
+                # Read CSV with proper handling for complex JSON data
+                df = pd.read_csv(file_path, escapechar='\\', quoting=1)  # quoting=1 is QUOTE_ALL
                 logging.info(f"Loaded {len(df)} posts from CSV: {file_path}")
                 
                 # Deserialize JSON-encoded comments back to lists
                 if 'comments' in df.columns:
                     def deserialize_comments(comments_json):
                         try:
-                            if pd.isna(comments_json) or comments_json == '':
+                            if pd.isna(comments_json) or comments_json == '' or comments_json == '[]':
                                 return []
                             if isinstance(comments_json, str):
-                                return json.loads(comments_json)
+                                # Handle escaped quotes in CSV
+                                comments_json = comments_json.replace('""', '"')
+                                parsed = json.loads(comments_json)
+                                return parsed if isinstance(parsed, list) else []
                             return comments_json if isinstance(comments_json, list) else []
-                        except (json.JSONDecodeError, TypeError):
+                        except (json.JSONDecodeError, TypeError) as e:
+                            # Log deserialization failures for debugging
+                            if isinstance(comments_json, str) and len(comments_json) > 10:
+                                logging.warning(f"Failed to deserialize comments (length {len(comments_json)}): {str(e)[:100]}")
                             return []
                     
+                    initial_empty = df['comments'].apply(lambda x: x == '[]' or pd.isna(x) or x == '').sum()
                     df['comments'] = df['comments'].apply(deserialize_comments)
+                    final_empty = df['comments'].apply(lambda x: len(x) == 0).sum()
+                    
+                    if initial_empty != final_empty:
+                        logging.info(f"Comments deserialized: {len(df) - final_empty}/{len(df)} posts have comments")
+                    else:
+                        logging.warning(f"Comment deserialization may have failed: {final_empty}/{len(df)} posts have no comments")
                     
             elif file_path.endswith('.json'):
                 with open(file_path, 'r', encoding='utf-8') as f:
@@ -679,8 +694,8 @@ class RedditDataAnalyzer:
         # Add relevance score to dataframe
         df_relevant['relevance_score'] = relevance_scores
         
-        # Filter: Keep posts with relevance score >= 20
-        relevance_threshold = 20
+        # Filter: Keep posts with relevance score >= 50 (much stricter)
+        relevance_threshold = 50
         df_filtered = df_relevant[df_relevant['relevance_score'] >= relevance_threshold].copy()
         
         # Sort by relevance score (highest first)
@@ -762,7 +777,7 @@ class RedditDataAnalyzer:
         return df_filtered
     
     def _has_keywords_in_comments(self, row, exclude_keywords):
-        """Check if a post has specific keywords/company mentions in comments"""
+        """Check if a post has specific keywords mentions in comments"""
         if not row.get('comments') or row['comments_collected'] == 0:
             return False
         
@@ -927,8 +942,142 @@ class RedditDataAnalyzer:
             logging.info(f"Saved analyzed data to: {json_filename}")
         
         return csv_filename, json_filename
+    
+    def _harmonize_schema(self, df):
+        """
+        Harmonize schema across different collection types
+        Ensures all DataFrames have consistent core columns for safe combining
+        """
+        # Define the core schema that all datasets should have
+        core_columns = {
+            # Required Reddit fields
+            'id': '',
+            'title': '',
+            'author': '',
+            'score': 0,
+            'upvote_ratio': 0.0,
+            'num_comments': 0,
+            'created_utc': 0.0,
+            'created_datetime': '',
+            'hours_ago': 0.0,
+            'days_ago': 0.0,
+            'url': '',
+            'permalink': '',
+            'selftext': '',
+            'is_self': False,
+            'domain': '',
+            'subreddit': '',
+            'flair_text': '',
+            'is_video': False,
+            'stickied': False,
+            'over_18': False,
+            'spoiler': False,
+            'locked': False,
+            'collection_timestamp': '',
+            'comments': [],
+            'comments_collected': 0,
+            
+            # Collection-specific fields (will be NaN/empty for files that don't have them)
+            'search_query': '',
+            'search_sort': '',
+            'search_time_filter': '',
+            'search_subreddit': '',
+            'found_in_post': False,
+            'found_in_comments': False,
+            'matched_keywords': [],
+            'broad_search_term': '',
+            'search_location': '',
+            
+            # Daily collection specific fields  
+            'tier': '',
+            'target_posts': 0,
+            'collection_method': ''
+        }
+        
+        # Add missing columns with default values
+        for col, default_val in core_columns.items():
+            if col not in df.columns:
+                # Create column with appropriate type based on default value
+                if isinstance(default_val, list):
+                    df[col] = [default_val.copy() for _ in range(len(df))]
+                else:
+                    df[col] = default_val
+                logging.debug(f"Added missing column '{col}' with default value")
+        
+        # Convert data types for consistency
+        try:
+            # Numeric columns
+            df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0).astype(int)
+            df['num_comments'] = pd.to_numeric(df['num_comments'], errors='coerce').fillna(0).astype(int)
+            df['upvote_ratio'] = pd.to_numeric(df['upvote_ratio'], errors='coerce').fillna(0.0)
+            df['created_utc'] = pd.to_numeric(df['created_utc'], errors='coerce').fillna(0.0)
+            df['hours_ago'] = pd.to_numeric(df['hours_ago'], errors='coerce').fillna(0.0)
+            df['days_ago'] = pd.to_numeric(df['days_ago'], errors='coerce').fillna(0.0)
+            df['comments_collected'] = pd.to_numeric(df['comments_collected'], errors='coerce').fillna(0).astype(int)
+            
+            # Boolean columns  
+            bool_columns = ['is_self', 'is_video', 'stickied', 'over_18', 'spoiler', 'locked', 'found_in_post', 'found_in_comments']
+            for col in bool_columns:
+                if col in df.columns:
+                    df[col] = df[col].fillna(False).astype(bool)
+            
+            # String columns - fill NaN with empty string
+            string_columns = ['title', 'author', 'url', 'permalink', 'selftext', 'domain', 
+                            'subreddit', 'flair_text', 'collection_timestamp', 'search_query',
+                            'search_sort', 'search_time_filter', 'search_subreddit', 'broad_search_term', 
+                            'search_location', 'tier', 'collection_method']
+            for col in string_columns:
+                if col in df.columns:
+                    df[col] = df[col].fillna('').astype(str)
+            
+            # List columns - ensure they're properly formatted
+            list_columns = ['comments', 'matched_keywords'] 
+            for col in list_columns:
+                if col in df.columns:
+                    # Handle missing/empty columns
+                    if df[col].empty or df[col].isna().all():
+                        df[col] = [[] for _ in range(len(df))]
+                    else:
+                        df[col] = df[col].apply(lambda x: x if isinstance(x, list) else [])
+            
+        except Exception as e:
+            logging.warning(f"Schema harmonization type conversion failed: {e}")
+        
+        logging.debug(f"Schema harmonized: {len(df.columns)} columns, {len(df)} rows")
+        return df
 
-def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=None):
+def get_analysis_settings_for_file(file_path):
+    """
+    Get optimal analysis settings - now uses consistent balanced approach
+    Returns tuple of (engagement_weights, quality_thresholds)
+    
+    Note: With two-tier filtering, thresholds are less critical since relevant posts auto-pass
+    """
+    # Use balanced weights suitable for all collection types
+    custom_weights = {
+        'score': 0.3,
+        'upvote_ratio': 0.25,
+        'comments': 0.25,
+        'comments_quality': 0.15,
+        'recency': 0.05
+    }
+    
+    # Use consistent balanced thresholds for all files
+    # Two-tier filtering ensures relevant posts (≥60 relevance) bypass these anyway
+    quality_thresholds = {
+        'min_engagement_score': 30,  # Balanced threshold
+        'min_score': 3,               # Lowered to be more inclusive
+        'min_comments': 1,            # Lowered to be more inclusive
+        'min_upvote_ratio': 0.6,      # Balanced
+        'max_days_ago': 14,           # More inclusive time window
+    }
+    
+    logging.info(f"📊 Using consistent analysis settings for: {os.path.basename(file_path)}")
+    logging.info(f"   Two-tier filtering: High relevance posts (≥50) auto-pass")
+    
+    return custom_weights, quality_thresholds
+
+def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=None, save_unfiltered=False):
     """
     Main analysis function
     
@@ -936,6 +1085,7 @@ def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=No
         file_path (str): Path to data file
         engagement_weights (dict): Custom engagement score weights
         filter_thresholds (dict): Filtering thresholds
+        save_unfiltered (bool): Save unfiltered results for debugging (default: False)
     """
     try:
         analyzer = RedditDataAnalyzer()
@@ -962,9 +1112,30 @@ def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=No
         # Calculate engagement scores (only on relevant posts)
         df_scored = analyzer.calculate_engagement_score(df_relevant, engagement_weights)
         
-        # Apply secondary filters if specified
+        # Apply two-tier filtering system: preserve highly relevant posts
         if filter_thresholds:
-            df_filtered = analyzer.filter_by_thresholds(df_scored, filter_thresholds)
+            # Tier 1: High relevance posts (50+) - pass with minimal filtering  
+            high_relevance = df_scored[df_scored['relevance_score'] >= 50].copy()
+            
+            # Tier 2: Medium relevance posts (20-49) - apply normal filtering
+            medium_relevance = df_scored[df_scored['relevance_score'] < 50].copy()
+            medium_filtered = analyzer.filter_by_thresholds(medium_relevance, filter_thresholds) if len(medium_relevance) > 0 else pd.DataFrame()
+            
+            # Combine both tiers
+            if len(high_relevance) > 0 and len(medium_filtered) > 0:
+                df_filtered = pd.concat([high_relevance, medium_filtered], ignore_index=True)
+            elif len(high_relevance) > 0:
+                df_filtered = high_relevance
+            elif len(medium_filtered) > 0:
+                df_filtered = medium_filtered
+            else:
+                df_filtered = pd.DataFrame()
+            
+            # Log the two-tier filtering results
+            if len(high_relevance) > 0:
+                logging.info(f"🎯 High relevance posts (≥50): {len(high_relevance)} posts auto-passed filtering")
+            if len(medium_filtered) > 0:
+                logging.info(f"📊 Medium relevance posts (<50): {len(medium_filtered)}/{len(medium_relevance)} posts passed filtering")
         else:
             df_filtered = df_scored
         
@@ -976,6 +1147,13 @@ def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=No
         
         # Save results
         base_filename = os.path.splitext(os.path.basename(file_path))[0]
+        
+        # Save unfiltered results with all scores for debugging (optional)
+        if save_unfiltered:
+            analyzer.save_analysis_results(df_scored, f"{base_filename}_unfiltered", save_json=False)
+            logging.info(f"💾 Saved unfiltered analysis (all posts with scores) for debugging")
+        
+        # Save filtered results
         csv_file, json_file = analyzer.save_analysis_results(df_final, base_filename, save_json=False)
         
         logging.info(f"\nAnalysis complete! Results saved to:")
@@ -989,7 +1167,7 @@ def analyze_reddit_data(file_path, engagement_weights=None, filter_thresholds=No
         logging.error(f"Analysis failed: {e}")
         return None
 
-def analyze_combined_reddit_data(file_paths, engagement_weights=None, filter_thresholds=None):
+def analyze_combined_reddit_data(file_paths, engagement_weights=None, filter_thresholds=None, save_unfiltered=False):
     """
     Combine multiple Reddit data files and analyze them together
     
@@ -997,19 +1175,31 @@ def analyze_combined_reddit_data(file_paths, engagement_weights=None, filter_thr
         file_paths (list): List of file paths to combine and analyze
         engagement_weights (dict): Custom engagement score weights
         filter_thresholds (dict): Filtering thresholds
+        save_unfiltered (bool): Save unfiltered results for debugging (default: False)
     """
     try:
         analyzer = RedditDataAnalyzer()
         combined_df = pd.DataFrame()
         
-        # Load and combine all files
+        # Load and combine all files with schema harmonization
         logging.info(f"Loading and combining {len(file_paths)} files...")
         for file_path in file_paths:
             logging.info(f"Loading: {os.path.basename(file_path)}")
             df = analyzer.load_data(file_path)
             if df is not None and not df.empty:
-                # Add source file info
+                # Add source file info and collection type
                 df['source_file'] = os.path.basename(file_path)
+                
+                # Detect collection type from filename/content
+                if 'search' in file_path.lower() or 'data_tools' in file_path.lower():
+                    df['collection_type'] = 'keyword_search'
+                elif 'daily' in file_path.lower() or 'activity_based' in file_path.lower():
+                    df['collection_type'] = 'daily_subreddits'
+                else:
+                    df['collection_type'] = 'unknown'
+                
+                # Harmonize schema - ensure all DataFrames have the same core columns
+                df = analyzer._harmonize_schema(df)
                 combined_df = pd.concat([combined_df, df], ignore_index=True)
             else:
                 logging.warning(f"Skipped empty or invalid file: {file_path}")
@@ -1018,7 +1208,14 @@ def analyze_combined_reddit_data(file_paths, engagement_weights=None, filter_thr
             logging.error("No data loaded from any files")
             return None
             
-        logging.info(f"Combined dataset: {len(combined_df)} total posts from {len(file_paths)} files")
+        # Remove duplicates based on Reddit post ID
+        initial_count = len(combined_df)
+        combined_df = combined_df.drop_duplicates(subset=['id'], keep='first')
+        duplicate_count = initial_count - len(combined_df)
+        if duplicate_count > 0:
+            logging.info(f"🔗 Removed {duplicate_count} duplicate posts")
+        
+        logging.info(f"Combined dataset: {len(combined_df)} unique posts from {len(file_paths)} files")
         
         # Perform sentiment analysis
         logging.info("Performing sentiment analysis on combined data...")
@@ -1036,10 +1233,33 @@ def analyze_combined_reddit_data(file_paths, engagement_weights=None, filter_thr
         logging.info("Calculating engagement scores...")
         combined_df = analyzer.calculate_engagement_score(combined_df, engagement_weights)
         
-        # Apply filtering thresholds
+        # Keep a copy for unfiltered debug output
+        combined_df_scored = combined_df.copy()
+        
+        # Apply two-tier filtering system: preserve highly relevant posts
         if filter_thresholds:
-            logging.info("Applying quality thresholds...")
-            combined_df = analyzer.filter_by_thresholds(combined_df, filter_thresholds)
+            # Tier 1: High relevance posts (50+) - pass with minimal filtering
+            high_relevance = combined_df[combined_df['relevance_score'] >= 50].copy()
+            
+            # Tier 2: Medium relevance posts (20-49) - apply normal filtering
+            medium_relevance = combined_df[combined_df['relevance_score'] < 50].copy()
+            medium_filtered = analyzer.filter_by_thresholds(medium_relevance, filter_thresholds) if len(medium_relevance) > 0 else pd.DataFrame()
+            
+            # Combine both tiers
+            if len(high_relevance) > 0 and len(medium_filtered) > 0:
+                combined_df = pd.concat([high_relevance, medium_filtered], ignore_index=True)
+            elif len(high_relevance) > 0:
+                combined_df = high_relevance
+            elif len(medium_filtered) > 0:
+                combined_df = medium_filtered
+            else:
+                combined_df = pd.DataFrame()
+            
+            # Log the two-tier filtering results
+            if len(high_relevance) > 0:
+                logging.info(f"🎯 High relevance posts (≥50): {len(high_relevance)} posts auto-passed filtering")
+            if len(medium_filtered) > 0:
+                logging.info(f"📊 Medium relevance posts (<50): {len(medium_filtered)}/{len(medium_relevance)} posts passed filtering")
         
         # Apply final sorting to prioritize best content
         combined_df = analyzer.apply_final_sorting(combined_df)
@@ -1050,6 +1270,12 @@ def analyze_combined_reddit_data(file_paths, engagement_weights=None, filter_thr
         # Save results with combined filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         combined_filename = f"reddit_combined_analysis_{timestamp}"
+        
+        # Save unfiltered results with all scores for debugging (optional)
+        if save_unfiltered:
+            analyzer.save_analysis_results(combined_df_scored, f"{combined_filename}_unfiltered", save_json=False)
+            logging.info(f"💾 Saved unfiltered analysis (all posts with scores) for debugging")
+        
         csv_file, json_file = analyzer.save_analysis_results(combined_df, combined_filename, save_json=False)
         
         logging.info(f"\nCombined analysis complete! Results saved to:")
@@ -1068,6 +1294,11 @@ if __name__ == "__main__":
     print("Starting Reddit Data Analyzer...")
     logging.info("Reddit Data Analyzer starting...")
     
+    # Check for debug mode
+    debug_mode = len(sys.argv) > 1 and '--debug' in sys.argv
+    if debug_mode:
+        logging.info("🐛 Debug mode enabled - will save unfiltered results")
+    
     # Find most recent data files in analysis_results folder (CSV only by default)
     csv_files = glob.glob("analysis_results/*.csv")
     print(f"Found {len(csv_files)} CSV files")
@@ -1084,80 +1315,61 @@ if __name__ == "__main__":
             print(f"  - {f}")
             logging.info(f"  - {f}")
         
-        # Analyze files individually (one output per input file)
-        files_to_analyze = reddit_files[:3]  # Analyze up to 3 most recent files
-        
-        for file_path in sorted(files_to_analyze, key=os.path.getctime, reverse=True):
-            logging.info(f"\n{'='*60}")
-            logging.info(f"ANALYZING: {file_path}")
-            logging.info(f"{'='*60}")
+        # SMART ANALYSIS: Choose approach based on file count and best practices
+        if len(reddit_files) == 1:
+            # Single file - run individual analysis but with tracking columns
+            logging.info("\n🔍 Single file detected - running individual analysis with tracking")
+            file_path = reddit_files[0]
             
-            # Adjust weights based on file type
-            if 'activity_based' in file_path.lower():
-                # Activity-based collection - focus more on engagement
-                custom_weights = {
-                    'score': 0.35,          
-                    'upvote_ratio': 0.15,    
-                    'comments': 0.3,        # Higher weight for comments
-                    'comments_quality': 0.15,
-                    'recency': 0.05         # Lower weight for recency (systematic collection)
-                }
-                quality_thresholds = {
-                    'min_engagement_score': 25,    
-                    'min_score': 3,                
-                    'min_comments': 1,             
-                    'min_upvote_ratio': 0.55,      
-                    'max_days_ago': 14,
-                    # 'exclude_keywords': ['company_name', 'product_name']  # Optional: Filter out specific company/product mentions
-                }
-            elif 'hybrid_search' in file_path.lower() or 'search' in file_path.lower():
-                # Search-based collection - focus on relevance and quality
-                custom_weights = {
-                    'score': 0.3,          
-                    'upvote_ratio': 0.25,   # Higher weight for community approval
-                    'comments': 0.25,       
-                    'comments_quality': 0.15,
-                    'recency': 0.05         
-                }
-                quality_thresholds = {
-                    'min_engagement_score': 35,    # Higher threshold for search results
-                    'min_score': 5,                
-                    'min_comments': 2,             
-                    'min_upvote_ratio': 0.65,      # Higher threshold
-                    'max_days_ago': 10,
-                    # 'exclude_keywords': ['company_name', 'product_name']  # Optional: Filter out specific company/product mentions
-                }
-            else:
-                # Default weights
-                custom_weights = {
-                    'score': 0.35,          
-                    'upvote_ratio': 0.2,    
-                    'comments': 0.25,       
-                    'comments_quality': 0.1,
-                    'recency': 0.1          
-                }
-                quality_thresholds = {
-                    'min_engagement_score': 30,    
-                    'min_score': 5,                
-                    'min_comments': 2,             
-                    'min_upvote_ratio': 0.6,       
-                    'max_days_ago': 10,             
-                    # 'exclude_keywords': ['company_name', 'product_name']  # Optional: Filter out specific mentions
-                }
+            # Determine optimal settings for this file type
+            custom_weights, quality_thresholds = get_analysis_settings_for_file(file_path)
             
-            # Run analysis
-            results = analyze_reddit_data(
-                file_path=file_path,
+            # Run individual analysis with tracking (uses combined analysis internally for consistency)
+            results = analyze_combined_reddit_data(
+                file_paths=[file_path],  # Single file in list
                 engagement_weights=custom_weights,
-                filter_thresholds=quality_thresholds
+                filter_thresholds=quality_thresholds,
+                save_unfiltered=debug_mode
             )
             
-            if results is not None:
-                logging.info(f"✓ Analysis complete for {file_path}")
-            else:
-                logging.error(f"✗ Analysis failed for {file_path}")
+        else:
+            # Multiple files - automatically use combined analysis for optimal results
+            logging.info(f"\n🎯 Multiple files detected - running combined analysis for optimal results")
+            logging.info("📊 This will harmonize schemas and remove duplicates across all collections")
             
-            logging.info("\n" + "-"*60)
+            # Use balanced settings for combined analysis
+            custom_weights = {
+                'score': 0.3,
+                'upvote_ratio': 0.25,
+                'comments': 0.25,
+                'comments_quality': 0.15,
+                'recency': 0.05
+            }
+            
+            quality_thresholds = {
+                'min_engagement_score': 30,  # Balanced threshold
+                'min_score': 3,
+                'min_comments': 1,
+                'min_upvote_ratio': 0.6,
+                'max_days_ago': 14
+            }
+            
+            # Run combined analysis
+            results = analyze_combined_reddit_data(
+                file_paths=reddit_files,
+                engagement_weights=custom_weights,
+                filter_thresholds=quality_thresholds,
+                save_unfiltered=debug_mode
+            )
+        
+        # Report results
+        if results is not None:
+            logging.info("✅ Analysis pipeline completed successfully")
+            logging.info("📁 Check analysis_results/ folder for output files")
+        else:
+            logging.error("❌ Analysis pipeline failed")
+        
+        logging.info("\n" + "-"*60)
         
     else:
         print("No Reddit data files found in current directory")

@@ -1,15 +1,28 @@
-# Reddit Data Collector
+# Reddit Data Collector & Analyzer
 
-A Python tool for collecting and analyzing Reddit posts from multiple subreddits using an activity based collection strategy. 
+A comprehensive Python toolkit for collecting, analyzing, and extracting insights from Reddit posts across multiple subreddits. Features intelligent collection strategies, advanced sentiment analysis, topic modeling, and automated orchestration.
 
 ## Features
 
-- **Activity-Based Collection Strategy**: Manually adjusts collection parameters based on subreddit activity levels
-- **Flexible Data Export**: Save data in both CSV and JSON formats
-- **Logging**: Detailed logs for monitoring and debugging
+### 🚀 **Data Collection**
+- **Activity-Based Collection**: Automatically adjusts collection parameters based on subreddit activity levels
+- **Hybrid Search Collection**: Keyword and phrase-based targeted collection with relevance scoring
+- **User Profile Collection**: Collect posts and comments from specific Reddit users
+- **Multi-Format Export**: Save data in both CSV and JSON formats
 - **Rate Limiting**: Built-in delays to respect Reddit's API limits
-- **Rich Metadata**: Collects 20+ data points per post including engagement metrics
-- **Time-Based Filtering**: Filtering based on subreddit activity patterns
+
+### 📊 **Advanced Analytics**
+- **Sentiment Analysis**: VADER sentiment analyzer for posts, titles, and comments
+- **Topic Modeling**: NMF-based unsupervised topic discovery and classification
+- **Engagement Scoring**: Sophisticated scoring system weighing multiple factors
+- **Relevance Filtering**: AI-powered content relevance assessment
+- **Combined Analysis**: Merge and analyze data from multiple collection runs
+
+### 🤖 **Automation & Orchestration**
+- **Full Pipeline Automation**: One-command data collection → analysis workflow
+- **Intelligent Processing**: Skip duplicates, handle errors, resume from interruptions
+- **Comprehensive Logging**: Detailed logs for monitoring and debugging
+- **Flexible Configuration**: Easy customization for different use cases
 
 ## Quick Start
 
@@ -36,9 +49,24 @@ pip install -r requirements.txt
    - Copy `praw.ini.example` to `praw.ini`
    - Add your credentials to `praw.ini`
 
-4. Run the collector:
+4. Run the complete pipeline (recommended):
 ```bash
-python reddit_daily_collector.py
+# Run both collection and analysis
+python reddit_orchestrator.py
+
+# Or run specific collection types:
+python reddit_orchestrator.py daily    # Activity-based collection only
+python reddit_orchestrator.py search   # Search-based collection only
+python reddit_orchestrator.py both     # Both types (default)
+```
+
+**Alternative: Individual Scripts**
+```bash
+# Manual collection and analysis
+python reddit_daily_collector.py       # Activity-based collection
+python reddit_search_collector.py      # Search-based collection
+python reddit_data_analyzer.py         # Analysis only
+python collect_users.py                # User profile collection
 ```
 
 ## Configuration
@@ -72,19 +100,19 @@ Edit the `SUBREDDIT_CONFIG` in `reddit_daily_collector.py` to customize subreddi
 
 ## Usage Examples
 
-### Collecting Comments from Specific Users
+### 🎯 **Complete Pipeline (Recommended)**
+```bash
+# Full automated pipeline: collect → analyze → generate insights
+python reddit_orchestrator.py
 
-Use the `collect_specific_users.py` script to collect all comments from specific Reddit users:
-
-```python
-# Edit the target_users list in collect_specific_users.py
-target_users = ['username1', 'username2']
-
-# Run the script
-python collect_specific_users.py
+# Specific collection strategies
+python reddit_orchestrator.py daily    # Activity-based posts only
+python reddit_orchestrator.py search   # Keyword-targeted posts only
 ```
 
-### Basic Collection
+### 📈 **Individual Collection Scripts**
+
+**Activity-Based Collection**
 ```python
 from reddit_daily_collector import RedditCollector
 
@@ -93,32 +121,57 @@ posts = collector.collect_subreddit_posts('datascience', limit=100)
 collector.save_to_csv(posts, 'my_data.csv')
 ```
 
-### Custom Configuration
+**Search-Based Collection**
 ```python
-# Modify the SUBREDDIT_CONFIG dictionary in the script
+from reddit_search_collector import RedditSearchCollector
+
+collector = RedditSearchCollector()
+posts = collector.collect_data_tools_posts()
+collector.save_combined_data(posts, 'search_results')
+```
+
+**User Profile Collection**
+```python
+# Edit target_users list in collect_users.py
+target_users = ['username1', 'username2']
+python collect_users.py
+```
+
+### 🔬 **Analysis Only**
+```bash
+# Analyze existing data files
+python reddit_data_analyzer.py
+
+# Or use the orchestrator for analysis only
+python -c "from reddit_orchestrator import RedditOrchestrator; o = RedditOrchestrator(); o.generate_final_combined_analysis()"
+```
+
+### ⚙️ **Custom Configuration**
+```python
+# Modify SUBREDDIT_CONFIG in reddit_daily_collector.py
 SUBREDDIT_CONFIG = {
     'high_activity': {
-        'subreddits': ['MachineLearning', 'Python'],
+        'subreddits': ['MachineLearning', 'Python', 'datascience'],
         'posts_per_sub': 100,
         'time_filter': 'day',
         'description': 'ML focused'
     }
 }
-```
 
-### Basic Collection
-```python
-from reddit_daily_collector import RedditCollector
-
-collector = RedditCollector()
-posts = collector.collect_subreddit_posts('datascience', limit=100)
-collector.save_to_csv(posts, 'my_data.csv')
+# Modify search terms in reddit_search_collector.py
+SEARCH_QUERIES = {
+    'data_tools': {
+        'keywords': ['tableau', 'powerbi', 'looker'],
+        'phrases': ['data visualization', 'business intelligence']
+    }
+}
 ```
 
 ## Data Schema
 
 Each collected post includes:
 
+### **Raw Data Schema**
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique Reddit post ID |
@@ -134,13 +187,42 @@ Each collected post includes:
 | `selftext` | string | Post content (for text posts) |
 | `subreddit` | string | Subreddit name |
 | `activity_tier` | string | Collection tier classification |
+| `comments` | json | Serialized comment threads (if collected) |
+
+### **Analyzed Data Schema** (Additional Fields)
+| Field | Type | Description |
+|-------|------|-------------|
+| `title_sentiment` | float | Sentiment score of title (-1 to 1) |
+| `title_sentiment_label` | string | Sentiment classification (positive/neutral/negative) |
+| `content_sentiment` | float | Sentiment score of post content |
+| `content_sentiment_label` | string | Content sentiment classification |
+| `avg_comment_sentiment` | float | Average sentiment of all comments |
+| `topic` | string | Assigned topic from NMF modeling |
+| `topic_score` | float | Confidence score for topic assignment |
+| `engagement_score` | float | Computed engagement score (0-100) |
+| `relevance_score` | integer | AI-assessed relevance to data tools/tech |
+| `_sentiment_order` | integer | Internal ranking for sentiment prioritization |
 
 ## Output Files
 
-The collector generates timestamped files:
-- `reddit_activity_based_YYYYMMDD.csv` - Tabular data for analysis
-- `reddit_activity_based_YYYYMMDD.json` - Structured data with metadata
-- `reddit_collector.log` - Detailed execution logs
+### **Collection Outputs**
+- `reddit_activity_based_YYYYMMDD.csv` - Activity-based collection (raw data)
+- `reddit_activity_based_YYYYMMDD.json` - Activity-based collection (with metadata)
+- `{query}_hybrid_search_YYYYMMDD_HHMMSS.csv` - Search-based collection results
+- `reddit_users_YYYYMMDD_HHMMSS.csv` - User profile collection results
+
+### **Analysis Outputs**  
+- `reddit_combined_analysis_YYYYMMDD_HHMMSS_analyzed_YYYYMMDD_HHMMSS.csv` - **Final combined analysis** (recommended)
+- Individual analyzed files: `*_analyzed_*.csv` (when running individual analysis)
+
+### **Logs**
+- `reddit_collector.log` - Collection execution logs
+- `reddit_data_analyzer.log` - Analysis execution logs  
+- `reddit_orchestrator.log` - Pipeline orchestration logs
+
+### **Directories**
+- `analysis_results/` - All output files are saved here
+- `progress_tracking/` - Collection progress and state files (if enabled)
 
 ## Best Practices
 
@@ -203,8 +285,51 @@ MIT License - see LICENSE file for details.
 
 ## Changelog
 
-### v1.0.0
+### v2.0.0 (Current)
+- **NEW**: Complete pipeline orchestration with `reddit_orchestrator.py`
+- **NEW**: Advanced sentiment analysis with VADER
+- **NEW**: Topic modeling with NMF (Non-negative Matrix Factorization)
+- **NEW**: Sophisticated engagement scoring system
+- **NEW**: AI-powered relevance filtering
+- **NEW**: Hybrid search collection with keyword + phrase targeting
+- **NEW**: User profile collection functionality
+- **NEW**: Combined analysis merging multiple data sources
+- **ENHANCED**: Comprehensive logging across all components
+- **ENHANCED**: Robust error handling and recovery
+- **ENHANCED**: Smart duplicate detection and removal
+
+### v1.0.0 
 - Initial release
-- Activity based collection strategy
-- Multi format export (CSV/JSON)
-- Logging and error handling
+- Activity-based collection strategy  
+- Multi-format export (CSV/JSON)
+- Basic logging and error handling
+
+## Advanced Features
+
+### **Sentiment Analysis**
+- **VADER Sentiment Analyzer**: Optimized for social media text
+- **Multi-level Analysis**: Titles, content, and comments analyzed separately
+- **Aggregate Scoring**: Combined sentiment metrics across all post components
+
+### **Topic Modeling** 
+- **NMF Algorithm**: Discovers hidden topics in collected data
+- **Automatic Classification**: Posts automatically categorized by dominant topic
+- **Configurable Topics**: Adjustable number of topics (default: 8)
+
+### **Engagement Scoring Algorithm**
+```python
+# Weighted scoring system
+engagement_score = (
+    score * 0.3 +           # Reddit score weight
+    upvote_ratio * 0.25 +   # Community approval
+    comments * 0.25 +       # Discussion activity  
+    comment_quality * 0.15 + # Comment sentiment
+    recency_factor * 0.05   # Time decay
+)
+```
+
+### **Smart Filtering**
+- **Relevance Assessment**: AI-powered filtering for data tools/tech content
+- **Quality Thresholds**: Configurable minimum engagement, score, comments
+- **Duplicate Detection**: Intelligent deduplication across collection runs
+- **Time-based Filtering**: Configurable recency requirements

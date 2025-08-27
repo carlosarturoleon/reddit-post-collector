@@ -1,2 +1,11 @@
+# Core Reddit API and data handling
 praw>=7.7.0
 pandas>=1.5.0
+numpy>=1.21.0
+
+# Sentiment analysis and NLP
+vaderSentiment>=3.3.2
+scikit-learn>=1.1.0
+
+# Logging and utilities (built-in Python modules, no additional installs needed)
+# logging, json, csv, os, datetime, time, sys, subprocess, glob, re
