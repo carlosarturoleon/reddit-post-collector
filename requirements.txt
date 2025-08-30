@@ -7,5 +7,8 @@ numpy>=1.21.0
 vaderSentiment>=3.3.2
 scikit-learn>=1.1.0
 
+# LLM integration (for reddit_llm_scorer.py)
+requests>=2.25.0
+
 # Logging and utilities (built-in Python modules, no additional installs needed)
-# logging, json, csv, os, datetime, time, sys, subprocess, glob, re
+# logging, json, csv, os, datetime, time, sys, subprocess, glob, re, ast
