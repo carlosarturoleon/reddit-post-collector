@@ -16,6 +16,7 @@ A comprehensive Python toolkit for collecting, analyzing, and extracting insight
 - **Topic Modeling**: NMF-based unsupervised topic discovery and classification
 - **Engagement Scoring**: Sophisticated scoring system weighing multiple factors
 - **Relevance Filtering**: AI-powered content relevance assessment
+- **LLM-Based Scoring**: Local LLM integration for intelligent post relevance scoring
 - **Combined Analysis**: Merge and analyze data from multiple collection runs
 
 ### 🤖 **Automation & Orchestration**
@@ -67,6 +68,9 @@ python reddit_daily_collector.py       # Activity-based collection
 python reddit_search_collector.py      # Search-based collection
 python reddit_data_analyzer.py         # Analysis only
 python collect_users.py                # User profile collection
+
+# LLM-based post scoring (requires Ollama)
+python reddit_llm_scorer.py <analyzed_csv_file>
 ```
 
 ## Configuration
@@ -166,6 +170,82 @@ SEARCH_QUERIES = {
     }
 }
 ```
+
+## 🤖 LLM-Based Post Scoring
+
+### **Overview**
+The LLM scorer uses a local Large Language Model to intelligently evaluate Reddit posts for relevance to data engineering and ETL workflows. This provides more nuanced scoring than traditional keyword-based approaches.
+
+### **Prerequisites**
+```bash
+# Install Ollama (local LLM runtime)
+# macOS:
+brew install ollama
+
+# Linux/Windows: Visit https://ollama.com/download
+
+# Start Ollama server
+ollama serve
+
+# Download a model (recommended: llama3.2:3b for speed)
+ollama pull llama3.2:3b
+```
+
+### **Usage**
+```bash
+# Score an analyzed CSV file
+python reddit_llm_scorer.py analysis_results/reddit_combined_analysis_YYYYMMDD_analyzed.csv
+
+# The script will:
+# 1. Connect to your local Ollama instance
+# 2. Score each post individually (including all comments)
+# 3. Save checkpoints every 10 posts for reliability
+# 4. Generate a new CSV sorted by LLM relevance scores
+```
+
+### **Features**
+- **Intelligent Analysis**: Evaluates post title, content, AND all comments together
+- **Checkpoint System**: Automatically saves progress every 10 posts
+- **Resume Capability**: If interrupted, resumes from last checkpoint
+- **Robust Comment Parsing**: Handles malformed JSON and CSV escaping issues
+- **Progress Tracking**: Real-time updates on scoring progress
+- **Configurable Models**: Works with any Ollama-supported model
+
+### **Scoring Criteria**
+The LLM evaluates posts on a 0-100 scale based on:
+
+**High Score (70-100):**
+- ETL/ELT pipeline challenges and solutions
+- Data integration between platforms
+- API integration difficulties
+- Data warehouse and analytics discussions
+- Business intelligence automation
+- Performance optimization topics
+
+**Medium Score (40-69):**
+- General analytics concepts
+- Database administration
+- Cloud platform discussions
+- Data modeling topics
+
+**Low Score (0-39):**
+- Unrelated programming tutorials
+- Career/salary discussions
+- Academic topics without practical application
+
+### **Output**
+```
+📊 Processing: reddit_analysis_20241120_analyzed.csv
+💬 Total comments to analyze: 1,247 across 89 posts  
+🤖 Starting LLM scoring with checkpoints every 10 posts...
+📈 Processed 50/216 posts | New: 45 | Cached: 5 | Avg: 73.2
+📄 Results saved to: reddit_analysis_20241120_analyzed_llm_scored_20241120_143022.csv
+```
+
+### **Model Recommendations**
+- **llama3.2:3b** - Fast, good quality (recommended)
+- **llama3.2:1b** - Fastest, lower quality
+- **llama3:8b** - Slower, highest quality
 
 ## Data Schema
 
@@ -285,7 +365,14 @@ MIT License - see LICENSE file for details.
 
 ## Changelog
 
-### v2.0.0 (Current)
+### v2.1.0 (Current)
+- **NEW**: LLM-based post scoring with local Ollama integration
+- **NEW**: Intelligent comment parsing with multiple JSON fallback methods
+- **NEW**: Checkpoint system for reliable large dataset processing
+- **NEW**: Resume capability for interrupted LLM scoring sessions
+- **ENHANCED**: Post relevance evaluation using advanced AI models
+
+### v2.0.0
 - **NEW**: Complete pipeline orchestration with `reddit_orchestrator.py`
 - **NEW**: Advanced sentiment analysis with VADER
 - **NEW**: Topic modeling with NMF (Non-negative Matrix Factorization)
